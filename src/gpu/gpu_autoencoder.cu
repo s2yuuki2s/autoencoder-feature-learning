@@ -607,9 +607,6 @@ void Gpu_Autoencoder::backward(const float *input,
 
   // pool2 backward: h2 -> encoded
   {
-    int out_w = 8, out_h = 8;
-    (void)out_w;
-    (void)out_h;
     int total_out = B * 8 * 8 * 128;
     int block = 256;
     int grid = (total_out + block - 1) / block;
@@ -715,9 +712,6 @@ void Gpu_Autoencoder::fit(const Dataset &dataset,
   (void)seed;
   (void)checkpoint;
   (void)output_dir;
-
-  int N = dataset.n;
-  int image_size = IMAGE_SIZE;
 
   for (int epoch = 1; epoch <= n_epoch; ++epoch)
   {
