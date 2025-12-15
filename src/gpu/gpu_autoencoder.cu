@@ -1,9 +1,11 @@
 #include <cstdio>
 #include <random>
+#include <cstring>
+#include <cstdlib>
 
 #include "../../include/gpu/gpu_autoencoder.h"
 #include "../../include/gpu/gpu_layers.h" // forward layers
-#include "cpu/cpu_layers.h" // cpu_mse_loss
+#include "cpu/cpu_layers.h"               // cpu_mse_loss
 #include "constants.h"
 #include "data_loader.h"
 
