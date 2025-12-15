@@ -158,7 +158,6 @@ __global__ void maxpool2x2_backward_kernel(
   const float *p00 = in + img * width * height * depth + (in_i0 * width + in_j0) * depth;
   const float *p01 = in + img * width * height * depth + (in_i0 * width + (in_j0 + 1)) * depth;
   const float *p10 = in + img * width * height * depth + ((in_i0 + 1) * width + in_j0) * depth;
-  const float *p11 = in + img * width * height * depth + ((in_i0 + 1) * width + (in_j0 + 1)) * depth;
 
   float *g00 = grad_in + img * width * height * depth + (in_i0 * width + in_j0) * depth;
   float *g01 = grad_in + img * width * height * depth + (in_i0 * width + (in_j0 + 1)) * depth;
