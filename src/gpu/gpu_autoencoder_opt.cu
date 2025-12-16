@@ -58,8 +58,6 @@ __global__ void mse_grad_kernel_opt(const float *__restrict__ recon,
 }
 
 // --- Backward Kernels Definitions ---
-// Định nghĩa trực tiếp tại đây để tránh lỗi Linker
-
 __global__ void conv2d_backward_kernel_opt(
     const float *__restrict__ in, const float *__restrict__ grad_out, const float *__restrict__ W,
     int n, int width, int height, int in_c, int out_c,
@@ -96,7 +94,6 @@ __global__ void conv2d_backward_kernel_opt(
 
             const float *in_pix = in + img * width * height * in_c + (row * width + col) * in_c;
             const float *w_ptr = W + f * KH * KW * in_c + (fi * KW + fj) * in_c;
-
             float *grad_in_pix = grad_in + img * width * height * in_c + (row * width + col) * in_c;
             float *grad_w_ptr = grad_W + f * KH * KW * in_c + (fi * KW + fj) * in_c;
 
@@ -187,9 +184,6 @@ __global__ void upsample2x_backward_kernel_opt(
     grad_in[idx] += base_grad_out[idx00] + base_grad_out[idx01] + base_grad_out[idx10] + base_grad_out[idx11];
 }
 
-// Kernel tính tổng bình phương sai số (Sum Squared Error)
-// Dùng atomicAdd để gom kết quả lại.
-// Lưu ý: atomicAdd float có thể sai số nhỏ, nhưng chấp nhận được cho training DL.
 __global__ void mse_loss_kernel_opt(const float *__restrict__ recon,
                                     const float *__restrict__ target,
                                     float *__restrict__ total_loss,
@@ -204,8 +198,6 @@ __global__ void mse_loss_kernel_opt(const float *__restrict__ recon,
         float diff = recon[i] - target[i];
         local_sum += diff * diff;
     }
-
-    // Gom kết quả cục bộ vào biến toàn cục
     atomicAdd(total_loss, local_sum);
 }
 
@@ -224,19 +216,43 @@ Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_)
     int W4_s = 256 * 3 * 3 * 128;
     int W5_s = 3 * 3 * 3 * 256;
 
-    // Weights + Biases
+    // --- Weights + Biases ---
     total_floats += (W1_s + 256) + (W2_s + 128) + (W3_s + 128) + (W4_s + 256) + (W5_s + 3);
-    // Activations
-    total_floats += (size_t)B * 32 * 32 * 256 + (size_t)B * 16 * 16 * 256 + (size_t)B * 16 * 16 * 128 + (size_t)B * 8 * 8 * 128;
-    total_floats += (size_t)B * 8 * 8 * 128 + (size_t)B * 16 * 16 * 128 + (size_t)B * 16 * 16 * 256 + (size_t)B * 32 * 32 * 256;
-    total_floats += (size_t)B * 32 * 32 * 3;
-    total_floats += (size_t)B * 32 * 32 * 3 + (size_t)B * 32 * 32 * 3;
-    // Gradients
+
+    // --- Activations ---
+    total_floats += (size_t)B * 32 * 32 * 256; // h1
+    total_floats += (size_t)B * 16 * 16 * 256; // p1
+    total_floats += (size_t)B * 16 * 16 * 128; // h2
+    total_floats += (size_t)B * 8 * 8 * 128;   // encoded
+    total_floats += (size_t)B * 8 * 8 * 128;   // h3
+    total_floats += (size_t)B * 16 * 16 * 128; // u1
+    total_floats += (size_t)B * 16 * 16 * 256; // h4
+    total_floats += (size_t)B * 32 * 32 * 256; // u2
+    total_floats += (size_t)B * 32 * 32 * 3;   // recon
+    total_floats += (size_t)B * 32 * 32 * 3;   // input
+    total_floats += (size_t)B * 32 * 32 * 3;   // target
+
+    // --- Gradients Weights ---
     total_floats += (W1_s + 256) + (W2_s + 128) + (W3_s + 128) + (W4_s + 256) + (W5_s + 3);
-    // Gradients Activations
-    total_floats += (size_t)B * 32 * 32 * 3 + (size_t)B * 32 * 32 * 256 + (size_t)B * 16 * 16 * 256 + (size_t)B * 16 * 16 * 128;
-    total_floats += (size_t)B * 8 * 8 * 128 + (size_t)B * 8 * 8 * 128 + (size_t)B * 16 * 16 * 128 + (size_t)B * 16 * 16 * 256;
-    total_floats += (size_t)B * 32 * 32 * 256 + (size_t)B * 32 * 32 * 3;
+
+    // --- Gradients Activations ---
+    total_floats += (size_t)B * 32 * 32 * 3;   // g_recon
+    total_floats += (size_t)B * 32 * 32 * 256; // g_u2
+    total_floats += (size_t)B * 16 * 16 * 256; // g_h4
+    total_floats += (size_t)B * 16 * 16 * 128; // g_u1
+    total_floats += (size_t)B * 8 * 8 * 128;   // g_h3
+    total_floats += (size_t)B * 8 * 8 * 128;   // g_encoded
+    total_floats += (size_t)B * 16 * 16 * 128; // g_h2
+    total_floats += (size_t)B * 16 * 16 * 256; // g_p1
+    total_floats += (size_t)B * 32 * 32 * 256; // g_h1
+    total_floats += (size_t)B * 32 * 32 * 3;   // g_input
+
+    // --- Loss Value (1 float) ---
+    total_floats += 1;
+
+    // !!! QUAN TRỌNG: Thêm Padding (Buffer) để tránh lỗi lệch byte nhỏ gây Invalid Argument !!!
+    // Cộng thêm 1MB float (~4MB RAM)
+    total_floats += 1024 * 1024;
 
     // 2. Allocate Pool
     this->total_memory_size = total_floats * sizeof(float);
@@ -291,7 +307,8 @@ Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_)
     d_g_p1 = allocate_from_pool(d_memory_pool, offset, B * 16 * 16 * 256);
     d_g_h1 = allocate_from_pool(d_memory_pool, offset, B * 32 * 32 * 256);
     d_g_input = allocate_from_pool(d_memory_pool, offset, B * 32 * 32 * 3);
-    d_target = allocate_from_pool(d_memory_pool, offset, B * 32 * 32 * 3);
+
+    // FIX: Đã xóa dòng cấp phát lại d_target ở đây để tránh Duplicate
     d_loss_val = allocate_from_pool(d_memory_pool, offset, 1);
 
     recon_host = new float[B * 32 * 32 * 3];
@@ -334,7 +351,7 @@ void Gpu_Autoencoder_Opt::forward(const float *input, int n, int width, int heig
     int input_size = n * 32 * 32 * 3;
     CHECK(cudaMemcpy(d_input, input, input_size * sizeof(float), cudaMemcpyHostToDevice));
 
-    // Call forward kernels from gpu_layers.h
+    // Optimized: Run full forward on GPU without syncing/copying back
     gpu_conv2D(d_input, d_W1, d_h1, n, 32, 32, 3, 256);
     gpu_add_bias(d_h1, d_b1, d_h1, n, 32, 32, 256);
     gpu_relu(d_h1, d_h1, n, 32, 32, 256);
@@ -379,6 +396,7 @@ void Gpu_Autoencoder_Opt::backward(const float *input, const float *target, int 
     CHECK(cudaMemset(d_dW5, 0, W5_s * sizeof(float)));
     CHECK(cudaMemset(d_db5, 0, 3 * sizeof(float)));
 
+    // Reset Activations Gradients
     CHECK(cudaMemset(d_g_recon, 0, n * 32 * 32 * 3 * sizeof(float)));
     CHECK(cudaMemset(d_g_u2, 0, n * 32 * 32 * 256 * sizeof(float)));
     CHECK(cudaMemset(d_g_h4, 0, n * 16 * 16 * 256 * sizeof(float)));
@@ -397,24 +415,28 @@ void Gpu_Autoencoder_Opt::backward(const float *input, const float *target, int 
     // MSE Grad
     int block = 256;
     mse_grad_kernel_opt<<<(img_size + block - 1) / block, block>>>(d_recon, d_target, d_g_recon, img_size);
-    CHECK(cudaDeviceSynchronize());
+    // OPTIMIZATION: Bỏ cudaDeviceSynchronize() để pipeline chạy liên tục
 
-    // Backward using internal kernels defined above
+    // Backward Kernels
     conv2d_backward_kernel_opt<<<(n * 32 * 32 * 3 + 255) / 256, 256>>>(d_u2, d_g_recon, d_W5, n, 32, 32, 256, 3, d_g_u2, d_dW5, d_db5);
     upsample2x_backward_kernel_opt<<<(n * 16 * 16 * 256 + 255) / 256, 256>>>(d_g_u2, n, 16, 16, 256, d_g_h4);
     relu_backward_kernel_opt<<<(n * 16 * 16 * 256 + 255) / 256, 256>>>(d_h4, d_g_h4, d_g_h4, n * 16 * 16 * 256);
+
     conv2d_backward_kernel_opt<<<(n * 16 * 16 * 256 + 255) / 256, 256>>>(d_u1, d_g_h4, d_W4, n, 16, 16, 128, 256, d_g_u1, d_dW4, d_db4);
     upsample2x_backward_kernel_opt<<<(n * 8 * 8 * 128 + 255) / 256, 256>>>(d_g_u1, n, 8, 8, 128, d_g_h3);
     relu_backward_kernel_opt<<<(n * 8 * 8 * 128 + 255) / 256, 256>>>(d_h3, d_g_h3, d_g_h3, n * 8 * 8 * 128);
+
     conv2d_backward_kernel_opt<<<(n * 8 * 8 * 128 + 255) / 256, 256>>>(d_encoded, d_g_h3, d_W3, n, 8, 8, 128, 128, d_g_encoded, d_dW3, d_db3);
     maxpool2x2_backward_kernel_opt<<<(n * 8 * 8 * 128 + 255) / 256, 256>>>(d_h2, d_encoded, d_g_encoded, n, 16, 16, 128, d_g_h2);
     relu_backward_kernel_opt<<<(n * 16 * 16 * 128 + 255) / 256, 256>>>(d_h2, d_g_h2, d_g_h2, n * 16 * 16 * 128);
+
     conv2d_backward_kernel_opt<<<(n * 16 * 16 * 128 + 255) / 256, 256>>>(d_p1, d_g_h2, d_W2, n, 16, 16, 256, 128, d_g_p1, d_dW2, d_db2);
     maxpool2x2_backward_kernel_opt<<<(n * 16 * 16 * 256 + 255) / 256, 256>>>(d_h1, d_p1, d_g_p1, n, 32, 32, 256, d_g_h1);
     relu_backward_kernel_opt<<<(n * 32 * 32 * 256 + 255) / 256, 256>>>(d_h1, d_g_h1, d_g_h1, n * 32 * 32 * 256);
+
     conv2d_backward_kernel_opt<<<(n * 32 * 32 * 256 + 255) / 256, 256>>>(d_input, d_g_h1, d_W1, n, 32, 32, 3, 256, d_g_input, d_dW1, d_db1);
 
-    CHECK(cudaDeviceSynchronize());
+    CHECK(cudaDeviceSynchronize()); // Sync cuối backward để đảm bảo gradient đã xong
 }
 
 void Gpu_Autoencoder_Opt::update_weights(float lr)
@@ -436,13 +458,13 @@ void Gpu_Autoencoder_Opt::update_weights(float lr)
     sgd_update_kernel_opt<<<1, 128>>>(d_b3, d_db3, lr, 128);
     sgd_update_kernel_opt<<<1, 256>>>(d_b4, d_db4, lr, 256);
     sgd_update_kernel_opt<<<1, 32>>>(d_b5, d_db5, lr, 3);
-    CHECK(cudaDeviceSynchronize());
+
+    // OPTIMIZATION: Bỏ sync, để vòng lặp tiếp theo tự handle
 }
 
 void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_size_, float learning_rate, int seed, int checkpoint, const char *output_dir)
 {
     float h_loss_val = 0.0f;
-
     for (int epoch = 1; epoch <= n_epoch; ++epoch)
     {
         Dataset shuffled = dataset;
@@ -458,34 +480,25 @@ void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_siz
             const float *x = batch.get_data();
             int current_batch_size = bn * 32 * 32 * 3;
 
-            // 1. Forward (Không copy recon về nữa!)
+            // 1. Forward (Zero Copy)
             this->forward(x, bn, 32, 32, 3);
 
-            // 2. Tính Loss trên GPU
-            // Reset giá trị loss cũ về 0
+            // 2. Compute Loss on GPU
             CHECK(cudaMemset(d_loss_val, 0, sizeof(float)));
-
-            // Gọi kernel tính loss
             int block = 256;
             int grid = (current_batch_size + block - 1) / block;
-            // Giới hạn grid size để tối ưu atomicAdd
             if (grid > 128)
                 grid = 128;
-
             mse_loss_kernel_opt<<<grid, block>>>(d_recon, d_target, d_loss_val, current_batch_size);
 
-            // 3. Backward & Update (Giữ nguyên)
+            // 3. Backward & Update
             this->backward(x, x, bn, 32, 32, 3);
             this->update_weights(learning_rate);
 
-            // 4. Lấy giá trị loss về (chỉ tốn cực ít thời gian)
-            // Lưu ý: Lệnh này sẽ chặn CPU lại (Sync implicit), nhưng nó nhanh hơn copy cả ảnh nhiều.
+            // 4. Retrieve Loss (Blocking call, but very small data)
             CHECK(cudaMemcpy(&h_loss_val, d_loss_val, sizeof(float), cudaMemcpyDeviceToHost));
-
-            // Loss MSE = Sum / N
             epoch_loss += h_loss_val / (float)current_batch_size;
 
-            // In tiến độ
             float progress = 100.0f * (float)(b + 1) / (float)num_batches;
             std::printf("\r[Optim] Epoch %d/%d - batch %d/%d (%.1f%%)", epoch, n_epoch, b + 1, num_batches, progress);
         }
@@ -499,13 +512,24 @@ float Gpu_Autoencoder_Opt::eval(const Dataset &dataset)
     int B = this->batch_size;
     double total_loss = 0.0;
     int count = 0;
+
+    Gpu_Autoencoder_Opt *self = const_cast<Gpu_Autoencoder_Opt *>(this);
+
     for (int b = 0; b < (N + B - 1) / B; ++b)
     {
         int start = b * B;
         int end = (start + B <= N) ? (start + B) : N;
+        int bn = end - start;
         const float *x = dataset.get_data() + start * 32 * 32 * 3;
-        this->forward(x, end - start, 32, 32, 3);
-        total_loss += cpu_mse_loss(const_cast<float *>(x), recon_host, end - start, 32, 32, 3);
+
+        // 1. Forward
+        self->forward(x, bn, 32, 32, 3);
+
+        // 2. FIX: Phải copy recon về host vì forward đã bỏ copy rồi
+        CHECK(cudaMemcpy(recon_host, d_recon, bn * 32 * 32 * 3 * sizeof(float), cudaMemcpyDeviceToHost));
+
+        // 3. Calc MSE on Host
+        total_loss += cpu_mse_loss(const_cast<float *>(x), recon_host, bn, 32, 32, 3);
         count++;
     }
     return (float)(total_loss / count);
@@ -530,6 +554,14 @@ Dataset Gpu_Autoencoder_Opt::encode(const Dataset &dataset) const
         self->forward(x, bn, 32, 32, 3);
 
         float *dst = features.get_data() + start * feat_w * feat_h * feat_c;
+
+        // Safety Check for Host RAM
+        if (dst == nullptr)
+        {
+            fprintf(stderr, "Host memory error at batch %d\n", b);
+            std::abort();
+        }
+
         CHECK(cudaMemcpy(dst, d_encoded, bn * feat_w * feat_h * feat_c * sizeof(float), cudaMemcpyDeviceToHost));
     }
     return features;
@@ -543,16 +575,12 @@ void Gpu_Autoencoder_Opt::save_features(const Dataset &features, const char *fil
         fprintf(stderr, "Cannot open %s for writing\n", filename);
         return;
     }
-    // Write header: num_samples (int), feature_dim (int)
     int n = features.n;
     int dim = features.width * features.height * features.depth;
     fwrite(&n, sizeof(int), 1, f);
     fwrite(&dim, sizeof(int), 1, f);
-
-    // Write data and labels
     fwrite(features.get_data(), sizeof(float), (size_t)n * dim, f);
     fwrite(features.get_labels(), sizeof(int), (size_t)n, f);
-
     fclose(f);
     printf("Successfully saved features to %s (N=%d, Dim=%d)\n", filename, n, dim);
 }
