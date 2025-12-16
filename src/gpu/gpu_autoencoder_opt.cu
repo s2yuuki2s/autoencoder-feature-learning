@@ -291,6 +291,8 @@ Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_)
     d_g_p1 = allocate_from_pool(d_memory_pool, offset, B * 16 * 16 * 256);
     d_g_h1 = allocate_from_pool(d_memory_pool, offset, B * 32 * 32 * 256);
     d_g_input = allocate_from_pool(d_memory_pool, offset, B * 32 * 32 * 3);
+    d_target = allocate_from_pool(d_memory_pool, offset, B * 32 * 32 * 3);
+    d_loss_val = allocate_from_pool(d_memory_pool, offset, 1);
 
     recon_host = new float[B * 32 * 32 * 3];
 }
@@ -440,7 +442,6 @@ void Gpu_Autoencoder_Opt::update_weights(float lr)
 void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_size_, float learning_rate, int seed, int checkpoint, const char *output_dir)
 {
     float h_loss_val = 0.0f;
-    int total_elements = batch_size_ * 32 * 32 * 3;
 
     for (int epoch = 1; epoch <= n_epoch; ++epoch)
     {
