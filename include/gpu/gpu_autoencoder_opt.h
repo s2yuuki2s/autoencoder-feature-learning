@@ -46,6 +46,7 @@ struct Gpu_Autoencoder_Opt
 
   // Output host
   float *recon_host;
+  float *d_loss_val;
 
   int batch_size;
 
@@ -62,7 +63,7 @@ struct Gpu_Autoencoder_Opt
   // Đã sửa lại hàm encode để trả về dữ liệu thật (cho Phase 4 sau này)
   Dataset encode(const Dataset &dataset) const;
 
-  void save_features(const Dataset& features, const char* filename) const;
+  void save_features(const Dataset &features, const char *filename) const;
 
   void save(const char *path) const;
   void load(const char *path);
