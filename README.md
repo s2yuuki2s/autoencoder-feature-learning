@@ -74,5 +74,7 @@ Dự án minh họa rõ ràng vai trò của lập trình song song trong việc
 8. Tài liệu tham khảo
 
 Krizhevsky, A. (2009). Learning Multiple Layers of Features from Tiny Images.
+
 Goodfellow, I., Bengio, Y., & Courville, A. (2016). Deep Learning. MIT Press.
+
 Course Staff. (2025). Parallel Programming – Final Project Specification.
