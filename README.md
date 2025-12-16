@@ -15,6 +15,8 @@ Mục tiêu chính của dự án bao gồm xây dựng mô hình autoencoder ch
 
 3. Cấu trúc thư mục
 
+```
+
 autoencoder-feature-learning-main/
 ├── include/
 │ ├── constants.h
@@ -42,6 +44,8 @@ autoencoder-feature-learning-main/
 │ └── download_cifar10.py
 ├── CSC14120_2025_Final Project.pdf
 └── README.md
+
+```
 
 4. Mô tả các thành phần chính
 
