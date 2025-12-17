@@ -465,13 +465,26 @@ void Gpu_Autoencoder_Opt::update_weights(float lr)
 void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_size_, float learning_rate, int seed, int checkpoint, const char *output_dir)
 {
     float h_loss_val = 0.0f;
+
+    // [DEBUG VARS]
+    float h_debug_recon = 0.0f;
+    float h_debug_target = 0.0f;
+
     for (int epoch = 1; epoch <= n_epoch; ++epoch)
     {
         Dataset shuffled = dataset;
         shuffle_dataset(shuffled);
         std::vector<Dataset> batches = create_minibatches(shuffled, batch_size_);
+
         double epoch_loss = 0.0;
         int num_batches = (int)batches.size();
+
+        // [DEBUG] Kiểm tra xem vòng lặp có thực sự chạy không
+        if (num_batches == 0)
+        {
+            printf("[ERROR] num_batches = 0! Kiểm tra lại dataset.\n");
+            return;
+        }
 
         for (int b = 0; b < num_batches; ++b)
         {
@@ -480,10 +493,37 @@ void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_siz
             const float *x = batch.get_data();
             int current_batch_size = bn * 32 * 32 * 3;
 
-            // 1. Forward (Zero Copy)
+            // [DEBUG] Kiểm tra dữ liệu input trên CPU có bằng 0 không?
+            if (b == 0 && epoch == 1)
+            {
+                float sum_cpu = 0;
+                for (int i = 0; i < 100; ++i)
+                    sum_cpu += x[i]; // Check 100 pixel đầu
+                printf("[DEBUG CPU] Input Sum (first 100): %f. Batch Size: %d\n", sum_cpu, bn);
+            }
+
+            // 1. Forward
             this->forward(x, bn, 32, 32, 3);
 
+            // [DEBUG] Kiểm tra xem Forward có bị lỗi Kernel không
+            cudaError_t err_fwd = cudaGetLastError();
+            if (err_fwd != cudaSuccess)
+            {
+                printf("[ERROR GPU] Forward Kernel failed: %s\n", cudaGetErrorString(err_fwd));
+                std::abort();
+            }
+
+            // COPY TARGET LÊN GPU
             CHECK(cudaMemcpy(d_target, x, current_batch_size * sizeof(float), cudaMemcpyHostToDevice));
+
+            // [DEBUG] Copy thử 1 pixel của Recon và Target từ GPU về để xem giá trị
+            if (b == 0)
+            {
+                CHECK(cudaMemcpy(&h_debug_recon, d_recon, sizeof(float), cudaMemcpyDeviceToHost));
+                CHECK(cudaMemcpy(&h_debug_target, d_target, sizeof(float), cudaMemcpyDeviceToHost));
+                // Nếu Recon = 0 và Target = 0 -> Loss = 0 là đúng (nhưng vô lý vì ảnh input không thể = 0)
+                // Nếu Recon = 0 và Target > 0 -> Loss > 0
+            }
 
             // 2. Compute Loss on GPU
             CHECK(cudaMemset(d_loss_val, 0, sizeof(float)));
@@ -491,14 +531,24 @@ void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_siz
             int grid = (current_batch_size + block - 1) / block;
             if (grid > 128)
                 grid = 128;
+
             mse_loss_kernel_opt<<<grid, block>>>(d_recon, d_target, d_loss_val, current_batch_size);
+            CHECK(cudaDeviceSynchronize()); // Sync để đảm bảo Loss tính xong
 
             // 3. Backward & Update
             this->backward(x, x, bn, 32, 32, 3);
             this->update_weights(learning_rate);
 
-            // 4. Retrieve Loss (Blocking call, but very small data)
+            // 4. Retrieve Loss
             CHECK(cudaMemcpy(&h_loss_val, d_loss_val, sizeof(float), cudaMemcpyDeviceToHost));
+
+            // [DEBUG] In giá trị chi tiết batch đầu tiên
+            if (b == 0)
+            {
+                printf("[DEBUG GPU] Batch 0: Recon[0]=%.4f, Target[0]=%.4f, Raw Loss=%.4f\n",
+                       h_debug_recon, h_debug_target, h_loss_val);
+            }
+
             epoch_loss += h_loss_val / (float)current_batch_size;
 
             float progress = 100.0f * (float)(b + 1) / (float)num_batches;
