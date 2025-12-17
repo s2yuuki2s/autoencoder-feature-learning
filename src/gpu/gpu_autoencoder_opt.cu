@@ -483,6 +483,8 @@ void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_siz
             // 1. Forward (Zero Copy)
             this->forward(x, bn, 32, 32, 3);
 
+            CHECK(cudaMemcpy(d_target, x, current_batch_size * sizeof(float), cudaMemcpyHostToDevice));
+
             // 2. Compute Loss on GPU
             CHECK(cudaMemset(d_loss_val, 0, sizeof(float)));
             int block = 256;
