@@ -4,6 +4,7 @@
 #include <cstring>
 #include <random>
 #include <vector>
+#include <algorithm>
 
 #include "gpu/gpu_autoencoder_opt.h"
 #include "gpu/gpu_layers.h"
@@ -11,6 +12,7 @@
 #include "constants.h"
 #include "data_loader.h"
 
+// Macro kiểm tra lỗi CUDA
 #define CHECK(call)                                                                                 \
     do                                                                                              \
     {                                                                                               \
@@ -28,22 +30,29 @@ static float rand_uniform(std::mt19937 &rng, float a, float b)
     return dist(rng);
 }
 
-// Helper: Cấp phát từ Pool
+// Helper: Cấp phát bộ nhớ từ Pool có sẵn
 static float *allocate_from_pool(float *pool_base, size_t &current_offset, int count)
 {
     float *ptr = pool_base + current_offset;
     current_offset += count;
+    // Align memory 256-bit (tùy chọn để tối ưu truy xuất)
+    if (current_offset % 32 != 0)
+    {
+        current_offset += (32 - (current_offset % 32));
+    }
     return ptr;
 }
 
-// ================== KERNEL DEFINITIONS ==================
+// ================== KERNEL DEFINITIONS (OPTIMIZED) ==================
 
 __global__ void sgd_update_kernel_opt(float *w, const float *dw, float lr, int size)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= size)
-        return;
-    w[idx] -= lr * dw[idx];
+    int stride = blockDim.x * gridDim.x;
+    for (int i = idx; i < size; i += stride)
+    {
+        w[i] -= lr * dw[i];
+    }
 }
 
 __global__ void mse_grad_kernel_opt(const float *__restrict__ recon,
@@ -52,12 +61,39 @@ __global__ void mse_grad_kernel_opt(const float *__restrict__ recon,
                                     int total)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= total)
-        return;
-    grad_recon[idx] = (2.0f / (float)total) * (recon[idx] - target[idx]);
+    int stride = blockDim.x * gridDim.x;
+    float scale = 2.0f / (float)total;
+
+    for (int i = idx; i < total; i += stride)
+    {
+        grad_recon[i] = scale * (recon[i] - target[i]);
+    }
 }
 
-// --- Backward Kernels Definitions ---
+// Kernel tính Loss MSE trực tiếp trên GPU sử dụng atomicAdd
+__global__ void mse_loss_kernel_opt(const float *__restrict__ recon,
+                                    const float *__restrict__ target,
+                                    float *__restrict__ total_loss,
+                                    int n)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    float local_sum = 0.0f;
+    for (int i = idx; i < n; i += stride)
+    {
+        float diff = recon[i] - target[i];
+        local_sum += diff * diff;
+    }
+
+    if (local_sum > 0.0f)
+    {
+        atomicAdd(total_loss, local_sum);
+    }
+}
+
+// --- Các Kernel Backward ---
+
 __global__ void conv2d_backward_kernel_opt(
     const float *__restrict__ in, const float *__restrict__ grad_out, const float *__restrict__ W,
     int n, int width, int height, int in_c, int out_c,
@@ -184,23 +220,6 @@ __global__ void upsample2x_backward_kernel_opt(
     grad_in[idx] += base_grad_out[idx00] + base_grad_out[idx01] + base_grad_out[idx10] + base_grad_out[idx11];
 }
 
-__global__ void mse_loss_kernel_opt(const float *__restrict__ recon,
-                                    const float *__restrict__ target,
-                                    float *__restrict__ total_loss,
-                                    int n)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-
-    float local_sum = 0.0f;
-    for (int i = idx; i < n; i += stride)
-    {
-        float diff = recon[i] - target[i];
-        local_sum += diff * diff;
-    }
-    atomicAdd(total_loss, local_sum);
-}
-
 // ================== IMPLEMENTATION ==================
 
 Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_)
@@ -209,17 +228,16 @@ Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_)
     int B = batch_size;
     size_t total_floats = 0;
 
-    // 1. Calculate Sizes
+    // 1. Calculate Sizes (Weights + Biases)
     int W1_s = 256 * 3 * 3 * 3;
     int W2_s = 128 * 3 * 3 * 256;
     int W3_s = 128 * 3 * 3 * 128;
     int W4_s = 256 * 3 * 3 * 128;
     int W5_s = 3 * 3 * 3 * 256;
 
-    // --- Weights + Biases ---
     total_floats += (W1_s + 256) + (W2_s + 128) + (W3_s + 128) + (W4_s + 256) + (W5_s + 3);
 
-    // --- Activations ---
+    // Activations
     total_floats += (size_t)B * 32 * 32 * 256; // h1
     total_floats += (size_t)B * 16 * 16 * 256; // p1
     total_floats += (size_t)B * 16 * 16 * 128; // h2
@@ -232,10 +250,8 @@ Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_)
     total_floats += (size_t)B * 32 * 32 * 3;   // input
     total_floats += (size_t)B * 32 * 32 * 3;   // target
 
-    // --- Gradients Weights ---
+    // Gradients
     total_floats += (W1_s + 256) + (W2_s + 128) + (W3_s + 128) + (W4_s + 256) + (W5_s + 3);
-
-    // --- Gradients Activations ---
     total_floats += (size_t)B * 32 * 32 * 3;   // g_recon
     total_floats += (size_t)B * 32 * 32 * 256; // g_u2
     total_floats += (size_t)B * 16 * 16 * 256; // g_h4
@@ -247,11 +263,10 @@ Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_)
     total_floats += (size_t)B * 32 * 32 * 256; // g_h1
     total_floats += (size_t)B * 32 * 32 * 3;   // g_input
 
-    // --- Loss Value (1 float) ---
+    // Loss Value
     total_floats += 1;
 
-    // !!! QUAN TRỌNG: Thêm Padding (Buffer) để tránh lỗi lệch byte nhỏ gây Invalid Argument !!!
-    // Cộng thêm 1MB float (~4MB RAM)
+    // Buffer Padding (An toàn bộ nhớ)
     total_floats += 1024 * 1024;
 
     // 2. Allocate Pool
@@ -308,7 +323,6 @@ Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_)
     d_g_h1 = allocate_from_pool(d_memory_pool, offset, B * 32 * 32 * 256);
     d_g_input = allocate_from_pool(d_memory_pool, offset, B * 32 * 32 * 3);
 
-    // FIX: Đã xóa dòng cấp phát lại d_target ở đây để tránh Duplicate
     d_loss_val = allocate_from_pool(d_memory_pool, offset, 1);
 
     recon_host = new float[B * 32 * 32 * 3];
@@ -378,6 +392,7 @@ void Gpu_Autoencoder_Opt::forward(const float *input, int n, int width, int heig
 
 void Gpu_Autoencoder_Opt::backward(const float *input, const float *target, int n, int width, int height, int depth)
 {
+    // Các kích thước
     int W1_s = 256 * 3 * 3 * 3;
     int W2_s = 128 * 3 * 3 * 256;
     int W3_s = 128 * 3 * 3 * 128;
@@ -408,16 +423,17 @@ void Gpu_Autoencoder_Opt::backward(const float *input, const float *target, int 
     CHECK(cudaMemset(d_g_h1, 0, n * 32 * 32 * 256 * sizeof(float)));
     CHECK(cudaMemset(d_g_input, 0, n * 32 * 32 * 3 * sizeof(float)));
 
+    // COPY input & target
     int img_size = n * 32 * 32 * 3;
     CHECK(cudaMemcpy(d_input, input, img_size * sizeof(float), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(d_target, target, img_size * sizeof(float), cudaMemcpyHostToDevice));
 
     // MSE Grad
     int block = 256;
-    mse_grad_kernel_opt<<<(img_size + block - 1) / block, block>>>(d_recon, d_target, d_g_recon, img_size);
-    // OPTIMIZATION: Bỏ cudaDeviceSynchronize() để pipeline chạy liên tục
+    int grid_img = (img_size + block - 1) / block;
+    mse_grad_kernel_opt<<<grid_img, block>>>(d_recon, d_target, d_g_recon, img_size);
 
-    // Backward Kernels
+    // Backward Kernels - Pipeline (No Sync)
     conv2d_backward_kernel_opt<<<(n * 32 * 32 * 3 + 255) / 256, 256>>>(d_u2, d_g_recon, d_W5, n, 32, 32, 256, 3, d_g_u2, d_dW5, d_db5);
     upsample2x_backward_kernel_opt<<<(n * 16 * 16 * 256 + 255) / 256, 256>>>(d_g_u2, n, 16, 16, 256, d_g_h4);
     relu_backward_kernel_opt<<<(n * 16 * 16 * 256 + 255) / 256, 256>>>(d_h4, d_g_h4, d_g_h4, n * 16 * 16 * 256);
@@ -436,7 +452,7 @@ void Gpu_Autoencoder_Opt::backward(const float *input, const float *target, int 
 
     conv2d_backward_kernel_opt<<<(n * 32 * 32 * 256 + 255) / 256, 256>>>(d_input, d_g_h1, d_W1, n, 32, 32, 3, 256, d_g_input, d_dW1, d_db1);
 
-    CHECK(cudaDeviceSynchronize()); // Sync cuối backward để đảm bảo gradient đã xong
+    CHECK(cudaDeviceSynchronize()); // Sync cuối cùng để đảm bảo backward xong
 }
 
 void Gpu_Autoencoder_Opt::update_weights(float lr)
@@ -447,44 +463,30 @@ void Gpu_Autoencoder_Opt::update_weights(float lr)
     int W4_s = 256 * 3 * 3 * 128;
     int W5_s = 3 * 3 * 3 * 256;
 
-    sgd_update_kernel_opt<<<(W1_s + 255) / 256, 256>>>(d_W1, d_dW1, lr, W1_s);
-    sgd_update_kernel_opt<<<(W2_s + 255) / 256, 256>>>(d_W2, d_dW2, lr, W2_s);
-    sgd_update_kernel_opt<<<(W3_s + 255) / 256, 256>>>(d_W3, d_dW3, lr, W3_s);
-    sgd_update_kernel_opt<<<(W4_s + 255) / 256, 256>>>(d_W4, d_dW4, lr, W4_s);
-    sgd_update_kernel_opt<<<(W5_s + 255) / 256, 256>>>(d_W5, d_dW5, lr, W5_s);
+    int block = 256;
+    sgd_update_kernel_opt<<<(W1_s + block - 1) / block, block>>>(d_W1, d_dW1, lr, W1_s);
+    sgd_update_kernel_opt<<<(W2_s + block - 1) / block, block>>>(d_W2, d_dW2, lr, W2_s);
+    sgd_update_kernel_opt<<<(W3_s + block - 1) / block, block>>>(d_W3, d_dW3, lr, W3_s);
+    sgd_update_kernel_opt<<<(W4_s + block - 1) / block, block>>>(d_W4, d_dW4, lr, W4_s);
+    sgd_update_kernel_opt<<<(W5_s + block - 1) / block, block>>>(d_W5, d_dW5, lr, W5_s);
 
     sgd_update_kernel_opt<<<1, 256>>>(d_b1, d_db1, lr, 256);
     sgd_update_kernel_opt<<<1, 128>>>(d_b2, d_db2, lr, 128);
     sgd_update_kernel_opt<<<1, 128>>>(d_b3, d_db3, lr, 128);
     sgd_update_kernel_opt<<<1, 256>>>(d_b4, d_db4, lr, 256);
     sgd_update_kernel_opt<<<1, 32>>>(d_b5, d_db5, lr, 3);
-
-    // OPTIMIZATION: Bỏ sync, để vòng lặp tiếp theo tự handle
 }
 
 void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_size_, float learning_rate, int seed, int checkpoint, const char *output_dir)
 {
     float h_loss_val = 0.0f;
-
-    // [DEBUG VARS]
-    float h_debug_recon = 0.0f;
-    float h_debug_target = 0.0f;
-
     for (int epoch = 1; epoch <= n_epoch; ++epoch)
     {
         Dataset shuffled = dataset;
         shuffle_dataset(shuffled);
         std::vector<Dataset> batches = create_minibatches(shuffled, batch_size_);
-
         double epoch_loss = 0.0;
         int num_batches = (int)batches.size();
-
-        // [DEBUG] Kiểm tra xem vòng lặp có thực sự chạy không
-        if (num_batches == 0)
-        {
-            printf("[ERROR] num_batches = 0! Kiểm tra lại dataset.\n");
-            return;
-        }
 
         for (int b = 0; b < num_batches; ++b)
         {
@@ -493,37 +495,12 @@ void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_siz
             const float *x = batch.get_data();
             int current_batch_size = bn * 32 * 32 * 3;
 
-            // [DEBUG] Kiểm tra dữ liệu input trên CPU có bằng 0 không?
-            if (b == 0 && epoch == 1)
-            {
-                float sum_cpu = 0;
-                for (int i = 0; i < 100; ++i)
-                    sum_cpu += x[i]; // Check 100 pixel đầu
-                printf("[DEBUG CPU] Input Sum (first 100): %f. Batch Size: %d\n", sum_cpu, bn);
-            }
-
-            // 1. Forward
+            // 1. Forward (Zero Copy - Input đã được copy vào d_input trong hàm forward)
             this->forward(x, bn, 32, 32, 3);
 
-            // [DEBUG] Kiểm tra xem Forward có bị lỗi Kernel không
-            cudaError_t err_fwd = cudaGetLastError();
-            if (err_fwd != cudaSuccess)
-            {
-                printf("[ERROR GPU] Forward Kernel failed: %s\n", cudaGetErrorString(err_fwd));
-                std::abort();
-            }
-
-            // COPY TARGET LÊN GPU
+            // [FIX QUAN TRỌNG] Copy dữ liệu Input vào d_target để tính Loss
+            // Nếu không có dòng này, d_target = 0 => Loss sai
             CHECK(cudaMemcpy(d_target, x, current_batch_size * sizeof(float), cudaMemcpyHostToDevice));
-
-            // [DEBUG] Copy thử 1 pixel của Recon và Target từ GPU về để xem giá trị
-            if (b == 0)
-            {
-                CHECK(cudaMemcpy(&h_debug_recon, d_recon, sizeof(float), cudaMemcpyDeviceToHost));
-                CHECK(cudaMemcpy(&h_debug_target, d_target, sizeof(float), cudaMemcpyDeviceToHost));
-                // Nếu Recon = 0 và Target = 0 -> Loss = 0 là đúng (nhưng vô lý vì ảnh input không thể = 0)
-                // Nếu Recon = 0 và Target > 0 -> Loss > 0
-            }
 
             // 2. Compute Loss on GPU
             CHECK(cudaMemset(d_loss_val, 0, sizeof(float)));
@@ -532,23 +509,15 @@ void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_siz
             if (grid > 128)
                 grid = 128;
 
+            // Bây giờ d_target đã có dữ liệu, Loss sẽ tính đúng
             mse_loss_kernel_opt<<<grid, block>>>(d_recon, d_target, d_loss_val, current_batch_size);
-            CHECK(cudaDeviceSynchronize()); // Sync để đảm bảo Loss tính xong
 
             // 3. Backward & Update
             this->backward(x, x, bn, 32, 32, 3);
             this->update_weights(learning_rate);
 
-            // 4. Retrieve Loss
+            // 4. Retrieve Loss (Blocking call)
             CHECK(cudaMemcpy(&h_loss_val, d_loss_val, sizeof(float), cudaMemcpyDeviceToHost));
-
-            // [DEBUG] In giá trị chi tiết batch đầu tiên
-            if (b == 0)
-            {
-                printf("[DEBUG GPU] Batch 0: Recon[0]=%.4f, Target[0]=%.4f, Raw Loss=%.4f\n",
-                       h_debug_recon, h_debug_target, h_loss_val);
-            }
-
             epoch_loss += h_loss_val / (float)current_batch_size;
 
             float progress = 100.0f * (float)(b + 1) / (float)num_batches;
@@ -577,7 +546,7 @@ float Gpu_Autoencoder_Opt::eval(const Dataset &dataset)
         // 1. Forward
         self->forward(x, bn, 32, 32, 3);
 
-        // 2. FIX: Phải copy recon về host vì forward đã bỏ copy rồi
+        // 2. Copy recon về host để dùng hàm tính MSE của CPU
         CHECK(cudaMemcpy(recon_host, d_recon, bn * 32 * 32 * 3 * sizeof(float), cudaMemcpyDeviceToHost));
 
         // 3. Calc MSE on Host
@@ -607,13 +576,13 @@ Dataset Gpu_Autoencoder_Opt::encode(const Dataset &dataset) const
 
         float *dst = features.get_data() + start * feat_w * feat_h * feat_c;
 
-        // Safety Check for Host RAM
         if (dst == nullptr)
         {
             fprintf(stderr, "Host memory error at batch %d\n", b);
             std::abort();
         }
 
+        // Copy encoded features từ GPU về Host
         CHECK(cudaMemcpy(dst, d_encoded, bn * feat_w * feat_h * feat_c * sizeof(float), cudaMemcpyDeviceToHost));
     }
     return features;
