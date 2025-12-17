@@ -35,13 +35,14 @@ static float rand_uniform(std::mt19937 &rng, float a, float b)
 __global__ void mse_grad_kernel(const float *__restrict__ recon,
                                 const float *__restrict__ target,
                                 float *__restrict__ grad_recon,
-                                int total)
+                                int total, int n)
 {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= total)
     return;
   float diff = recon[idx] - target[idx];
-  float scale = 2.0f / (float)total;
+  // float scale = 2.0f / (float)total;
+  float scale = 2.0f / (float)(n); // scale theo batch size
   grad_recon[idx] = scale * diff;
 }
 
@@ -531,7 +532,7 @@ void Gpu_Autoencoder::backward(const float *input,
     int block = 256;
     int grid = (total + block - 1) / block;
     mse_grad_kernel<<<grid, block>>>(
-        d_recon, d_target, d_g_recon, total);
+        d_recon, d_target, d_g_recon, total, B);
     CHECK(cudaDeviceSynchronize());
   }
 
