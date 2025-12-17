@@ -168,14 +168,22 @@ __global__ void maxpool2x2_backward_kernel(
   float go = grad_out_pix[c];
 
   // route gradient to the max location
+  // if (p00[c] == out_val)
+  //   g00[c] += go;
+  // else if (p01[c] == out_val)
+  //   g01[c] += go;
+  // else if (p10[c] == out_val)
+  //   g10[c] += go;
+  // else
+  //   g11[c] += go;
   if (p00[c] == out_val)
-    g00[c] += go;
+    atomicAdd(&g00[c], go);
   else if (p01[c] == out_val)
-    g01[c] += go;
+    atomicAdd(&g01[c], go);
   else if (p10[c] == out_val)
-    g10[c] += go;
+    atomicAdd(&g10[c], go);
   else
-    g11[c] += go;
+    atomicAdd(&g11[c], go);
 }
 
 // Upsample 2x backward:
