@@ -1,43 +1,22 @@
 #ifndef GPU_AUTOENCODER_H
-#define GPU_AUTOENCODER_H
-
-#include "../data_loader.h"
+#define GPU_AUTOENCODER_
 
 struct Gpu_Autoencoder
 {
   // Weights & biases (device pointers)
-  float *d_W1, *d_b1;
-  float *d_W2, *d_b2;
-  float *d_W3, *d_b3;
-  float *d_W4, *d_b4;
-  float *d_W5, *d_b5;
+  float *d_W1, *d_b1, *d_W2, *d_b2, *d_W3, *d_b3, *d_W4, *d_b4, *d_W5, *d_b5;
 
   // Activations (device)
-  float *d_h1, *d_p1, *d_h2, *d_encoded;
-  float *d_h3, *d_u1, *d_h4, *d_u2, *d_recon;
+  float *d_h1, *d_p1, *d_h2, *d_encoded, *d_h3, *d_u1, *d_h4, *d_u2, *d_recon;
 
   // Input & target trên device
-  float *d_input;
-  float *d_target;
+  float *d_input, *d_target;
 
   // Gradients cho weights/biases (device)
-  float *d_dW1, *d_db1;
-  float *d_dW2, *d_db2;
-  float *d_dW3, *d_db3;
-  float *d_dW4, *d_db4;
-  float *d_dW5, *d_db5;
+  float *d_dW1, *d_db1, *d_dW2, *d_db2, *d_dW3, *d_db3, *d_dW4, *d_db4, *d_dW5, *d_db5;
 
   // Gradients cho activations (device)
-  float *d_g_recon;
-  float *d_g_u2;
-  float *d_g_h4;
-  float *d_g_u1;
-  float *d_g_h3;
-  float *d_g_encoded;
-  float *d_g_h2;
-  float *d_g_p1;
-  float *d_g_h1;
-  float *d_g_input;
+  float *d_g_recon, *d_g_u2, *d_g_h4, *d_g_u1, *d_g_h3, *d_g_encoded, *d_g_h2, *d_g_p1, *d_g_h1, *d_g_input;
 
   // Output recon trên HOST để tính loss / visualize
   float *recon_host;

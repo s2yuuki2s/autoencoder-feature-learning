@@ -1,5 +1,5 @@
 #include <cstdio>
-#include "../../include/gpu/gpu_layers.h"
+#include "include/gpu/gpu_layers.h"
 #include <cuda_runtime.h>
 
 #define CHECK(call)                                        \

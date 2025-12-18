@@ -1,5 +1,5 @@
-#include "../include/data_loader.h"
-#include "../include/constants.h"
+#include "data_loader.h"
+#include "constants.h"
 
 #include <algorithm>
 #include <cstdio>

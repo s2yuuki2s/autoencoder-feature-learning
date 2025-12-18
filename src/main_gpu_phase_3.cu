@@ -1,68 +1,73 @@
 #include <cstdio>
 #include <chrono>
-#include "constants.h"
+
 #include "data_loader.h"
 #include "gpu/gpu_autoencoder_opt.h"
 
 int main(int argc, char **argv)
 {
-  // 1. Dataset setup
-  const char *dataset_dir = (argc > 1 ? argv[1] : "./data/cifar-10-batches-bin");
 
-  // 2. Hyperparameters (Đồng bộ với Phase 1 & 2)
-  int n_epoch = 20; // Đã đổi từ 5 -> 20 để so sánh công bằng
-  int batch_size = 32;
-  float lr = 1e-3f;
-  int seed = 42;
-  int checkpoint = 0;                        // Thêm biến này
-  const char *out_dir = "./checkpoints_opt"; // Folder riêng cho Opt
+ const char *dataset_dir = (argc > 1 ? argv[1] : "./data/cifar-10-batches-bin");
 
-  std::printf("=== Phase 3: GPU Optimized (Memory Pool) ===\n");
-  std::printf("Dataset dir   : %s\n", dataset_dir);
-  std::printf("Epochs        : %d\n", n_epoch);
-  std::printf("Batch size    : %d\n", batch_size);
-  std::printf("Learning rate : %.1e\n", lr);
-  std::printf("Seed          : %d\n", seed);
+ // Hyperparameters
+ // Tăng Batch Size lên 64 để tận dụng Shared Memory Tiling tốt hơn
+ // (Giúp lấp đầy các SMs trên GPU và che giấu độ trễ truy cập Global Memory)
+ int batch_size = 64;
+ int n_epoch = 20;
+ float lr = 1e-3f; // Có thể thử tăng lên 0.005f hoặc 0.01f nếu loss giảm chậm
+ int seed = 42;
+ int checkpoint = 0;
+ const char *out_dir = "./checkpoints_opt_fused";
 
-  // 3. Load & shuffle dataset
-  Dataset train_ds = load_dataset(dataset_dir, true);
-  shuffle_dataset(train_ds);
+ std::printf("=== Phase 3: GPU Advanced Optimization (Shared Mem + Fusion) ===\n");
+ std::printf("Dataset dir   : %s\n", dataset_dir);
+ std::printf("Epochs        : %d\n", n_epoch);
+ std::printf("Batch size    : %d (Optimized for Occupancy)\n", batch_size);
+ std::printf("Learning rate : %.1e\n", lr);
+ std::printf("Seed          : %d\n", seed);
 
-  // 4. Init Optimized Autoencoder
-  Gpu_Autoencoder_Opt ae(batch_size);
-  ae.init_weights(seed);
+ // Load & shuffle dataset
+ Dataset train_ds = load_dataset(dataset_dir, true);
+ shuffle_dataset(train_ds);
 
-  // 5. Training Loop & Timing
-  auto t0 = std::chrono::high_resolution_clock::now();
-  // Lưu ý: Đảm bảo hàm fit của Gpu_Autoencoder_Opt nhận đúng tham số này
-  ae.fit(train_ds, n_epoch, batch_size, lr, seed, checkpoint, out_dir);
-  auto t1 = std::chrono::high_resolution_clock::now();
+ // Init Optimized Autoencoder
+ // Class này sử dụng Kernels trong gpu_layers.cu (bản Tiling + Fusion)
+ Gpu_Autoencoder_Opt ae(batch_size);
+ ae.init_weights(seed);
 
-  double total_sec = std::chrono::duration<double>(t1 - t0).count();
-  double time_per_epoch = total_sec / n_epoch;
+ // Training Loop & Timing
+ auto t0 = std::chrono::high_resolution_clock::now();
+ ae.fit(train_ds, n_epoch, batch_size, lr, seed, checkpoint, out_dir);
+ auto t1 = std::chrono::high_resolution_clock::now();
 
-  std::printf("GPU (Opt) total training time: %.2f s\n", total_sec);
-  std::printf("GPU (Opt) time per epoch     : %.2f s\n", time_per_epoch);
+ double total_sec = std::chrono::duration<double>(t1 - t0).count();
+ double time_per_epoch = total_sec / n_epoch;
 
-  // 6. Evaluate MSE (Thêm vào để kiểm tra độ hội tụ)
-  float mse = ae.eval(train_ds);
-  std::printf("Final reconstruction MSE: %.6f\n", mse);
+ std::printf("GPU (Fused) Total Time    : %.2f s\n", total_sec);
+ std::printf("GPU (Fused) Time per Epoch: %.2f s\n", time_per_epoch);
 
-  // 7. Save Model
-  ae.save("./checkpoints_opt/autoencoder_opt.bin");
+ // 6. Evaluate MSE
+ float mse = ae.eval(train_ds);
+ std::printf("Final reconstruction MSE: %.6f\n", mse);
 
-  // --- FEATURE EXTRACTION (Giữ lại phần này cho Phase 4) ---
-  // Phần này không ảnh hưởng đến việc đo thời gian train ở trên
-  std::printf("\n--- Extracting Features for Phase 4 ---\n");
+ // 7. Save Model Weights
+ ae.save("./checkpoints_opt_fused/autoencoder_fused.bin");
 
-  std::printf("Extracting features from TRAIN set...\n");
-  Dataset train_features = ae.encode(train_ds);
-  ae.save_features(train_features, "train_features.bin");
+ // --- 8. FEATURE EXTRACTION FOR PHASE 4 (SVM) ---
+ std::printf("\n--- Extracting Features for Phase 4 (SVM) ---\n");
 
-  std::printf("Loading & Extracting features from TEST set...\n");
-  Dataset test_ds = load_dataset(dataset_dir, false); // is_train = false
-  Dataset test_features = ae.encode(test_ds);
-  ae.save_features(test_features, "test_features.bin");
+ // A. Extract Train Features
+ std::printf("-> Encoding TRAIN set (50,000 images)...\n");
+ // Lưu ý: encode() sẽ dùng GPU forward pass tối ưu để lấy vector (8,8,128) -> flatten
+ Dataset train_features = ae.encode(train_ds);
+ ae.save_features(train_features, "train_features_opt.bin");
 
-  return 0;
+ // B. Extract Test Features
+ std::printf("-> Loading & Encoding TEST set (10,000 images)...\n");
+ Dataset test_ds = load_dataset(dataset_dir, false); // is_train = false
+ Dataset test_features = ae.encode(test_ds);
+ ae.save_features(test_features, "test_features_opt.bin");
+
+ std::printf("\n=== Phase 3 Completed Successfully ===\n");
+ return 0;
 }

@@ -3,9 +3,9 @@
 #include <cstring>
 #include <cstdlib>
 
-#include "../../include/gpu/gpu_autoencoder.h"
-#include "../../include/gpu/gpu_layers.h" // forward layers
-#include "cpu/cpu_layers.h"               // cpu_mse_loss
+#include "gpu/gpu_autoencoder.h"
+#include "gpu/gpu_layers.h"
+#include "cpu/cpu_layers.h"
 #include "constants.h"
 #include "data_loader.h"
 
