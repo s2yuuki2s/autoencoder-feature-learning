@@ -328,6 +328,7 @@ Dataset Gpu_Autoencoder_Opt::encode(const Dataset &dataset) const
   int N = dataset.n;
   int B = batch_size;
   Dataset features(N, 8, 8, 128);
+  std::memcpy(features.get_labels(), dataset.get_labels(), N * sizeof(int));
   Gpu_Autoencoder_Opt *self = const_cast<Gpu_Autoencoder_Opt *>(this);
   for (int b = 0; b < (N + B - 1) / B; ++b)
   {
