@@ -1,6 +1,6 @@
 #include <cuda_runtime.h>
 #include <cstdio>
-#include "include/gpu/gpu_layers_opt.h"
+#include "../../include/gpu/gpu_layers_opt.h"
 
 #define TILE_W 16
 #define TILE_H 16
