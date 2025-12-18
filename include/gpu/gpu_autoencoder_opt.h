@@ -1,6 +1,8 @@
 #ifndef GPU_AUTOENCODER_OPT_H
 #define GPU_AUTOENCODER_OPT_H
 
+#include "../data_loader.h"
+
 struct Gpu_Autoencoder_Opt
 {
  float *d_memory_pool;

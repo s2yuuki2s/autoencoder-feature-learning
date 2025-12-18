@@ -7,6 +7,7 @@
 #include "gpu/gpu_autoencoder_opt.h"
 #include "gpu/gpu_layers_opt.h"
 #include "cpu/cpu_layers.h"
+#include "constants.h"
 #include "data_loader.h"
 
 #define CHECK(call)                                        \
