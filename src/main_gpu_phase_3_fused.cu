@@ -12,7 +12,7 @@ int main(int argc, char **argv)
  // 2. Hyperparameters
  // Tăng Batch Size lên 64 để tận dụng Shared Memory Tiling tốt hơn
  // (Giúp lấp đầy các SMs trên GPU và che giấu độ trễ truy cập Global Memory)
- int batch_size = 32;
+ int batch_size = 64;
  int n_epoch = 20;
  float lr = 1e-3f; // Có thể thử tăng lên 0.005f hoặc 0.01f nếu loss giảm chậm
  int seed = 42;

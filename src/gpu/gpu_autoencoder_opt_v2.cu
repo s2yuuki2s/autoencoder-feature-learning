@@ -34,6 +34,7 @@ __global__ void sgd_k(float *w, const float *dw, float lr, int size)
   for (int i = idx; i < size; i += blockDim.x * gridDim.x)
     w[i] -= lr * dw[i];
 }
+
 // MSE Loss
 __global__ void mse_loss_k(const float *r, const float *t, float *l, int n)
 {
@@ -47,11 +48,16 @@ __global__ void mse_loss_k(const float *r, const float *t, float *l, int n)
   if (s > 0)
     atomicAdd(l, s);
 }
-// MSE Grad
-__global__ void mse_grad_k(const float *r, const float *t, float *g, int n, int bs)
+
+// MSE Grad [ĐÃ SỬA LỖI INF]
+// n: total elements (B * H * W * C)
+__global__ void mse_grad_k(const float *r, const float *t, float *g, int n)
 {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  float scale = 2.0f / (float)bs;
+  // SỬA: Chia cho tổng số phần tử (n) thay vì batch_size
+  // Để gradient không bị quá lớn (Exploding Gradient)
+  float scale = 2.0f / (float)n;
+
   for (int i = idx; i < n; i += blockDim.x * gridDim.x)
     g[i] = scale * (r[i] - t[i]);
 }
@@ -63,8 +69,8 @@ __global__ void mse_grad_k(const float *r, const float *t, float *g, int n, int 
 Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_) : batch_size(batch_size_), d_memory_pool(nullptr)
 {
   int B = batch_size;
-  // Calculate total size (approx) - Ensure this is large enough
-  size_t total_floats = 100000000;
+  // Tăng size pool lên 150M để an toàn cho cả Batch 32 và 64
+  size_t total_floats = 150000000;
   this->total_memory_size = total_floats * sizeof(float);
   CHECK(cudaMalloc(&d_memory_pool, this->total_memory_size));
   CHECK(cudaMemset(d_memory_pool, 0, this->total_memory_size));
@@ -120,7 +126,15 @@ Gpu_Autoencoder_Opt::Gpu_Autoencoder_Opt(int batch_size_) : batch_size(batch_siz
 
   d_loss_val = allocate_from_pool(d_memory_pool, off, 1);
   recon_host = new float[B * 32 * 32 * 3];
+
+  // Safety check
+  if (off * sizeof(float) > this->total_memory_size)
+  {
+    printf("ERROR: Memory Pool Overflow! Needed %zu, allocated %zu\n", off * sizeof(float), this->total_memory_size);
+    abort();
+  }
 }
+
 Gpu_Autoencoder_Opt::~Gpu_Autoencoder_Opt()
 {
   CHECK(cudaFree(d_memory_pool));
@@ -197,8 +211,13 @@ void Gpu_Autoencoder_Opt::backward(const float *input, const float *target, int 
   CHECK(cudaMemset(d_g_h1, 0, n * 32 * 32 * 256 * 4));
   CHECK(cudaMemset(d_g_input, 0, n * 32 * 32 * 3 * 4));
 
+  // [SỬA] Không copy d_input, d_target ở đây nữa vì đã có sẵn trên GPU từ hàm forward/fit
+  // Tránh lỗi crash nếu truyền nullptr vào
+
   // MSE Grad
-  mse_grad_k<<<(n * 32 * 32 * 3 + 255) / 256, 256>>>(d_recon, d_target, d_g_recon, n * 32 * 32 * 3, n);
+  int total = n * 32 * 32 * 3;
+  // SỬA: Chỉ truyền total (n), bỏ tham số bs vì không cần thiết nữa
+  mse_grad_k<<<(total + 255) / 256, 256>>>(d_recon, d_target, d_g_recon, total);
 
   // Backward Flow
   // Layer 5 (Recon -> u2). Output layer no ReLU.
@@ -266,12 +285,17 @@ void Gpu_Autoencoder_Opt::fit(const Dataset &dataset, int n_epoch, int batch_siz
       forward(batch.get_data(), n, 32, 32, 3);
       CHECK(cudaMemcpy(d_target, batch.get_data(), sz * 4, cudaMemcpyHostToDevice));
       CHECK(cudaMemset(d_loss_val, 0, 4));
+
+      // Tính loss
       mse_loss_k<<<(sz + 255) / 256, 256>>>(d_recon, d_target, d_loss_val, sz);
-      backward(nullptr, nullptr, n, 32, 32, 3); // inputs are already on device
+
+      // Backward: Truyền nullptr vì d_input và d_target đã có sẵn
+      backward(nullptr, nullptr, n, 32, 32, 3);
+
       update_weights(learning_rate);
       CHECK(cudaMemcpy(&h_loss, d_loss_val, 4, cudaMemcpyDeviceToHost));
       ep_loss += h_loss / sz;
-      printf("\r[Opt V3 - Fused] Epoch %d/%d - Batch %d/%d", epoch, n_epoch, b + 1, nb);
+      printf("\r[Opt V3 - Fused] Epoch %d/%d - Batch %d/%d (%.1f%%)", epoch, n_epoch, b + 1, nb, 100.0f * (b + 1) / nb);
     }
     printf("\nEpoch %d Loss: %.6f\n", epoch, ep_loss / nb);
   }
