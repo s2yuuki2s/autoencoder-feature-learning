@@ -1,8 +1,8 @@
 #include <cstdio>
 #include <chrono>
 
-#include "include/data_loader.h"
-#include "include/gpu/gpu_autoencoder.h"
+#include "../../include/data_loader.h"
+#include "../../include/gpu/gpu_autoencoder.h"
 
 int main(int argc, char **argv)
 {
