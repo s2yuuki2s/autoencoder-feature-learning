@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <random>
 #include <vector>
+#include <cstring>
 
 #include "gpu/gpu_autoencoder_opt.h"
 #include "gpu/gpu_layers_opt.h"
