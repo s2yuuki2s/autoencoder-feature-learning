@@ -229,3 +229,23 @@ std::vector<Dataset> create_minibatches(const Dataset &dataset, int batch_size)
 
   return batches;
 }
+
+Dataset take_first_n(const Dataset &src, int N_take)
+{
+  int N = (N_take < src.n) ? N_take : src.n;
+
+  // Tạo Dataset mới với kích thước N
+  Dataset dst(N, src.width, src.height, src.depth);
+
+  int image_size = src.width * src.height * src.depth;
+
+  // Copy data
+  std::memcpy(dst.get_data(), src.get_data(),
+              sizeof(float) * N * image_size);
+
+  // Copy labels
+  std::memcpy(dst.get_labels(), src.get_labels(),
+              sizeof(int) * N);
+
+  return dst;
+}

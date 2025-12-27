@@ -1,7 +1,7 @@
 #ifndef GPU_AUTOENCODER_H
 #define GPU_AUTOENCODER_
 
-#include "../data_loader.h"
+#include "data_loader.h"
 
 struct Gpu_Autoencoder
 {

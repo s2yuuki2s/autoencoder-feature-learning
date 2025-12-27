@@ -37,5 +37,6 @@ struct Dataset
 Dataset load_dataset(const char *dataset_dir, bool is_train);
 void shuffle_dataset(Dataset &dataset);
 std::vector<Dataset> create_minibatches(const Dataset &dataset, int batch_size);
+Dataset take_first_n(const Dataset &src, int N_take);
 
 #endif

@@ -49,9 +49,6 @@ struct Cpu_Autoencoder
   float eval(const Dataset &dataset) const;
 
   Dataset encode(const Dataset &dataset) const;
-
-  void save(const char *path) const;
-  void load(const char *path);
 };
 
 #endif

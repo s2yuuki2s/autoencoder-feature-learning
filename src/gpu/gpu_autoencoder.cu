@@ -42,7 +42,7 @@ __global__ void mse_grad_kernel(const float *__restrict__ recon,
     return;
   float diff = recon[idx] - target[idx];
   // float scale = 2.0f / (float)total;
-  float scale = 2.0f / (float)(n); // scale theo batch size
+  float scale = 2.0f / (float)total; // scale theo batch size
   grad_recon[idx] = scale * diff;
 }
 
